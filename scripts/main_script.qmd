@@ -1,0 +1,258 @@
+---
+title: "main_script"
+format: docx
+editor: visual
+execute: 
+  warning: false
+  echo: false
+params:
+  date_start: "2025-01-01"
+  date_end: "2026-01-01"
+---
+
+# start
+
+First we'll grab the data, if you don't know your project's name, you can find all available project names in the initial-check chunk. Adjust the dates above in the parameters. This will constrain the data pull.
+
+```{r grab-data}
+library(flextable)
+library(dplyr)
+source(here::here("scripts/00_initial_data_query.R")) #this grabs the parquet file here - "L:\DOW\BWAM Share\data\parquet\analytical_table_store\obt_result_including_rejects.parquet"
+#plus the QA data
+
+```
+
+check the range and project list - enter/change your project here
+
+```{r initial-check}
+
+range(all_df$EVENT_DATETIME)
+unique(all_df$PROJECT)
+
+raw_chem<-all_df |> 
+  filter(PROJECT %in% c("RIBS Screening - Niagara",
+                       "RIBS Screening - Ontario",
+                       "RIBS Screening - Mohawk"),
+         SAMPLE_TYPE %in% "chemistry")
+
+sdgs<-unique(raw_chem$SAMPLE_DELIVERY_GROUP)
+
+```
+
+## Changes from the QAPP
+
+the first section of the DUAR asks just about overall changed to teh QAPP - so schedule, goals, collection/field procedures. Use the QAPP to guide this section.
+
+## Section 1.4. Deviations from the QAPP
+
+Suggested wording
+
+The project was implemented following the procedures described in QAPP RIBS-0001_V25. The DUAR details QAPP deviations associated with data collection, review, verification, and validation by evaluating Data Quality Indicators (DQIs) of precision, accuracy, completeness, comparability, and representativeness. Data largely met QC specifications; however, there were some deviations. Data usability is indicated for each result as: unacceptable for use, data rejected (R), acceptable for trend analysis only due to minor deviations (T), or fully acceptable for all uses (A). Specific qualifier derivation procedures are described in the QAPP and in SOP-GEN-#110. The intended use of these data is to establish a baseline informing NYSDEC Division of Water’s priorities for water quality standard development and to provide a statewide characterization of CECs. The majority of the data meet the DQO requirements stated in the QAPP and are usable for the stated project objectives. Any data quality issues, site changes, or modifications are noted within this DUAR and through DOW qualifiers associated with the data to indicate use limitations. Sample precision and accuracy were evaluated through sample matrix spike/matrix spike duplicates (MS/MSDs) and sample surrogate recoveries for applicable analytical methods (EPA Methods 1633A, 300.1, and 8270D or E SIM). Laboratory performance was evaluated by examining laboratory QC flags, case narratives, laboratory method blank (LMB) detections, and surrogate/internal standard percent recoveries when applicable. Deviations from the acceptable criteria were noted and associated environmental samples were qualified following procedures described in SOP-GEN-#110 Data Validation and Verification and the associated QAPP.
+
+```{r}
+
+#read in the qc file and the SDGs that apply
+qc <- open_dataset(file.path(dir, "QC.parquet")) |> 
+  filter(SAMPLE_DELIVERY_GROUP %in% sdgs) |>
+  collect()
+
+```
+
+## Section 2 - Data review
+
+this section will get into the meat of the data validation and verification.
+
+Suggested wording
+
+## Section 2. ENVIRONMENTAL INFORMATION AND USABILITY DETERMINATION
+
+All data review was conducted by the Project Lead. Data were received from the contract laboratory (ALS-Environmental Rochester) for each sampling event as a level IV data package including an EDD (EQuIS v3 or v4 format as Batch, Sample, and TestResultQC as separate txt files) and two PDFs consisting of a full and summary laboratory report for each sample delivery group (SDG). The txt files were converted to CSVs for the “Sample” and “TestResultQC” for ease of viewing. Data were extracted and saved as CSVs for one set of “Sample” and “TestQCResult” per EDD and saved in the original EDD file folder for ease of use. Upon receipt, data packages were verified by the Project Lead using site lists derived from Survey123 documentation and COCs. Data packages were reviewed by the Project Lead to ensure all expected data were received, free of errors, and met DEC reporting specifications. Data were verified for completeness, correctness, and compliance with analytical objectives set in the QAPP by the WQMA data team. Data were then validated to determine if DQOs were met for individual results, and if results were of sufficient quality to meet the project objectives. Review included evaluating Sample surrogate recovery for applicable parameters, evaluating laboratory blanks, field blanks, and equipment blank detections with sample results, reviewing lab qualifiers, and MS/MSDs. Data usability was assigned for each result as: unacceptable for use data rejected (R), acceptable for trend analysis only due to minor deviations (T), or fully acceptable for all uses (A). Specific qualifier derivation procedures are described in the QAPP and in SOP-GEN-#110.
+
+## Section 2.1 Data Review
+
+Suggested wording
+
+(this section is pretty small) Checks for sample naming agreement and QC collection were confirmed for correctness and updated in the compiled data by the Project Lead.
+
+## Section 2.2 Data Verification
+
+Suggested wording
+
+Data Verification is a process in which data are checked for accuracy and inconsistencies after data are sent from the contract laboratory to NYSDEC to ensure data followed contractual requirements. The number and identity of field and QC samples were verified by comparing Survey123 records or event records with laboratory reports to calculate completeness. Any necessary modifications to sample data were noted in Table X (update) of this DUAR and associated with the data affected in the notes column of the compiled data file by the Project Lead. All field and QC samples were accounted for in the final data compilation. Completeness, correctness, and conformance/compliance of the data set were evaluated against the method, procedural, and contractual requirements. Any deviations to QC collection rates are noted in Tables X(update) and X (update). Data correctness and conformance to the QAPP was verified by examining the specifications for each parameter, reporting format, and data qualification. Analytical methods were reviewed and reporting limits examined for any major discrepancies that were not noted by laboratory qualifiers (ex. elevated reporting limit due to sample dilution). All laboratory deliverables conformed with the contracted data packages or corrections were requested by the Project Lead from ALS Rochester.
+
+## Section 2.3 Data Validation
+
+Suggested wording
+
+Data validation is an analyte- and sample-specific process that extends the evaluation of data beyond method, procedure, or contractual compliance (i.e., data verification) to determine the quality of a specific data set relative to the end use. Data were validated following procedures described in SOP-GEN-#110 Data Validation and Verification and the QAPP. Corrective actions included assigning data qualifiers to samples when DQIs were not met to indicate appropriate data usability. Any additional abnormalities, such as poor analytical performance due to matrix interference, preservation issues, or samples that required re-extraction and reanalysis, were stated in the Case Narrative, and were reflected as data qualifiers or in the “notes” column of the compiled data when applicable.
+
+## Section 2.4. Evaluation of Data Quality Indicators and Objectives for Analytical Data
+
+Suggested wording
+
+Project Data Quality Objectives (DQOs) are from Section A7 of the QAPP referenced on Page 1. Table X(update) and Table x(update) summarize the analytical parameters collected for this project and the QC performance for each parameter against each DQO.
+
+## Summary Statement of DQO QC Exceedances
+
+
+Completeness - this uses the # of dry sites to evaluate the success of the completeness metric
+
+```{r completeness}
+
+
+# complete<-raw_chem |> 
+#   mutate(total_sites = length(unique(SITE_CODE))) |> 
+#   group_by(SITE_CODE,EVENT_SAMPLED) |> 
+#   summarise(n=n(),
+#             freq = (n/total_sites) * 100)
+
+
+
+```
+
+
+this table summarizes the DQI's identified in the QAPP
+
+```{r overall_summary}
+
+overall_summary<-raw_chem |> 
+  group_by(PARAMETER_NAME,FRACTION) |> 
+  mutate(num = 1,
+         total = sum(num)) |> 
+  ungroup() |> 
+  group_by(PARAMETER_NAME,FRACTION,RESULT_QUALIFIER) |> 
+  summarise(n=n(),
+            frequency = (n/total)*100) |> 
+  distinct()
+
+# Create a Word-friendly table
+ft <- flextable::flextable(overall_summary)
+ft <- flextable::autofit(ft) # Adjust column widths
+ft <- flextable::theme_vanilla(ft) # Clean style
+ft <- flextable::highlight(
+  ft,
+  i = ~ RESULT_QUALIFIER %in% "R",       # Rows where Score > 90
+  j = "RESULT_QUALIFIER",            # Column to highlight
+  color = "red"             
+)
+
+ft
+```
+
+# rejected samples - DQI's
+
+```{r check for DQIs}
+#rejects 
+rejects<-qc |> 
+  filter(SASS_RECOMMENDED_QUALIFIER %in% "reject")
+
+rejects_table<-rejects |> 
+  select(PARAMETER_NAME,
+         FRACTION, 
+         SASS_RECOMMENDED_QUALIFIER,
+         HOLDING_TIME_QUALIFIER,
+         MATRIX_SPIKE_QUALIFIER,
+         EQUIPMENT_BLANK_QUALIFIER,
+         SASS_SCOPE_OF_APPLICABILITY,
+         SASS_NOTES, 
+         LAB_QUALIFIER) |> 
+  distinct() |> 
+  mutate(holding_time = case_match(
+    HOLDING_TIME_QUALIFIER,
+    "reject" ~ 1,
+    .default = 0),
+    MSMSD  = case_match(
+      MATRIX_SPIKE_QUALIFIER,
+      "reject"~ 1,
+      .default = 0)) |> 
+  mutate(equipment_blanks = case_match(
+    EQUIPMENT_BLANK_QUALIFIER,
+    "reject" ~ 1,
+    .default = 0
+  )) |> 
+  select(PARAMETER_NAME,
+         FRACTION,
+         equipment_blanks,
+         MSMSD,
+         holding_time) |> 
+  mutate(total = sum(c_across(c(holding_time,equipment_blanks,MSMSD))))
+
+# Create a Word-friendly table
+ft2 <- flextable::flextable(rejects_table)
+# Highlight specific cells by condition
+ft2 <- flextable::highlight(
+  ft2,
+  i = ~ equipment_blanks >0,       # Rows where Score > 90
+  j = "equipment_blanks",          # Column to highlight
+  color = "gold"             
+)
+ft2 <- flextable::highlight(
+  ft2,
+  i = ~ MSMSD >0,       # Rows where Score > 90
+  j = "MSMSD",          # Column to highlight
+  color = "gold"             
+)
+ft2 <- flextable::highlight(
+  ft2,
+  i = ~ holding_time >0,       # Rows where Score > 90
+  j = "holding_time",          # Column to highlight
+  color = "gold"             
+)
+ft2 <- flextable::highlight(
+  ft2,
+  i = ~ total >0,       # Rows where Score > 90
+  j = "total",          # Column to highlight
+  color = "red"             
+)
+#had to do this for each one - there is probably a better way to do this
+
+ft2 <- flextable::autofit(ft2) # Adjust column widths
+ft2 <- flextable::theme_vanilla(ft2) # Clean style
+
+ft2
+
+
+
+
+```
+
+# Results Site specific rejected values
+
+do we need these?
+
+```{r specific rejected values}
+#make 2 tables, one with the final flags and stuff, one with teh SASS recs
+raw_filtered_table<-raw_chem |>
+  dplyr::filter(RESULT_QUALIFIER %in% c("R", "J+", "J-", "T")) |>
+  dplyr::select(PROJECT,
+         SITE_CODE,
+         PARAMETER_NAME,FRACTION,
+         UNIT,
+         RESULT_QUALIFIER,RESULT_QUALIFIER_NOTE) |>
+  dplyr::distinct()
+
+# Create a Word-friendly table
+ft3 <- flextable::flextable(raw_filtered_table)
+# Highlight specific cells by condition
+
+ft3 <- flextable::highlight(
+  ft3,
+  i = ~ RESULT_QUALIFIER %in% "R",       # Rows where Score > 90
+  j = "RESULT_QUALIFIER",            # Column to highlight
+  color = "red"             
+)
+
+#had to do this for each one - there is probably a better way to do this
+
+ft3 <- flextable::autofit(ft3) # Adjust column widths
+ft3 <- flextable::theme_vanilla(ft3) # Clean style
+
+ft3
+
+```
+
+## Section 2.5 Evaluating Data in Terms of User Needs
+
+Suggested wording
+
+The evaluations described in this DUAR indicate that the data are of sufficient quality to meet the project objectives. The intended use of the data is to establish a baseline to inform NYSDEC Division of Water’s priorities for water quality monitoring through the RIBS monitoring program. Impacts to data quality occurred infrequently and any impacts toward usability were indicated as DOW qualifiers and notes.
