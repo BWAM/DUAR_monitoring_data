@@ -94,22 +94,38 @@ Project Data Quality Objectives (DQOs) are from Section A7 of the QAPP reference
 
 ## Summary Statement of DQO QC Exceedances
 
-
-Completeness - this uses the # of dry sites to evaluate the success of the completeness metric
+Completeness - this uses the \# of dry sites to evaluate the success of the completeness metric
 
 ```{r completeness}
 
 
-# complete<-raw_chem |> 
-#   mutate(total_sites = length(unique(SITE_CODE))) |> 
-#   group_by(SITE_CODE,EVENT_SAMPLED) |> 
-#   summarise(n=n(),
-#             freq = (n/total_sites) * 100)
+complete<-raw_chem |>
+  group_by(PROJECT) |> 
+  select(SITE_CODE,PROJECT,EVENT_SAMPLED) |> 
+  distinct() |> 
+  mutate(total_sites = length(unique(SITE_CODE))) |>
+  ungroup() |> 
+  filter(EVENT_SAMPLED %in% TRUE) |> 
+  group_by(PROJECT) |>
+  summarise(n=n(),
+            total = total_sites,
+            freq = (n/total_sites) * 100) |> 
+  distinct()
 
+# Create a Word-friendly table
+ft <- flextable::flextable(complete)
+ft <- flextable::autofit(ft) # Adjust column widths
+ft <- flextable::theme_vanilla(ft) # Clean style
+ft <- flextable::highlight(
+  ft,
+  i = ~ freq < 80,       # Rows where Score > 90
+  j = "freq",            # Column to highlight
+  color = "red"             
+)
 
+ft
 
 ```
-
 
 this table summarizes the DQI's identified in the QAPP
 
