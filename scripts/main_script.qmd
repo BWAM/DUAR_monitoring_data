@@ -8,13 +8,14 @@ execute:
 params:
   date_start: "2025-01-01"
   date_end: "2026-01-01"
+  multi_visit: FALSE
 ---
 
 # start
 
 First we'll grab the data, if you don't know your project's name, you can find all available project names in the initial-check chunk. Adjust the dates above in the parameters. This will constrain the data pull.
 
-```{r grab-data}
+```{r grab-data., message=FALSE, warning=FALSE}
 library(flextable)
 library(dplyr)
 source(here::here("scripts/00_initial_data_query.R")) #this grabs the parquet file here - "L:\DOW\BWAM Share\data\parquet\analytical_table_store\obt_result_including_rejects.parquet"
@@ -30,9 +31,7 @@ range(all_df$EVENT_DATETIME)
 unique(all_df$PROJECT)
 
 raw_chem<-all_df |> 
-  filter(PROJECT %in% c("RIBS Screening - Niagara",
-                       "RIBS Screening - Ontario",
-                       "RIBS Screening - Mohawk"),
+  filter(PROJECT %in% c( "Lake Probability Sampling 2024-2025"     ),
          SAMPLE_TYPE %in% "chemistry")
 
 sdgs<-unique(raw_chem$SAMPLE_DELIVERY_GROUP)
@@ -52,8 +51,8 @@ The project was implemented following the procedures described in QAPP RIBS-0001
 ```{r}
 
 #read in the qc file and the SDGs that apply
-qc <- open_dataset(file.path(dir, "QC.parquet")) |> 
-  filter(SAMPLE_DELIVERY_GROUP %in% sdgs) |>
+qc <- open_dataset(file.path(dir, "QC_CLEAN.parquet")) |> 
+ filter(SAMPLE_DELIVERY_GROUP %in% sdgs) |>
   collect()
 
 ```
@@ -98,19 +97,56 @@ Completeness - this uses the \# of dry sites to evaluate the success of the comp
 
 ```{r completeness}
 
-
-complete<-raw_chem |>
+if(params$multi_visit){
+  complete<-raw_chem |>
   group_by(PROJECT) |> 
-  select(SITE_CODE,PROJECT,EVENT_SAMPLED) |> 
+  mutate(date = format(EVENT_DATETIME, "%Y-%m-%d"),
+         dry = case_when(
+           EVENT_SAMPLED %in% "FALSE" ~1,
+           TRUE~0)) |> 
+  select(SITE_CODE,PROJECT,date,EVENT_SAMPLED,dry) |> 
   distinct() |> 
-  mutate(total_sites = length(unique(SITE_CODE))) |>
+  mutate(site_date = paste(SITE_CODE,date,sep = "_"),
+         total_trips = length(unique(date)),
+         total_sites = length(unique(SITE_CODE)),
+         dry_sites = sum(dry))|>
   ungroup() |> 
-  filter(EVENT_SAMPLED %in% TRUE) |> 
+  #filter(EVENT_SAMPLED %in% TRUE) |> 
   group_by(PROJECT) |>
-  summarise(n=n(),
-            total = total_sites,
-            freq = (n/total_sites) * 100) |> 
+  summarise(n_samples=n(),
+            sites_in_survey = total_sites,
+            total_trips = total_trips,
+            expected_events = sites_in_survey * total_trips,
+            dry_sites = expected_events - n_samples,
+            completeness = (100-(dry_sites/expected_events) * 100)) |> 
   distinct()
+}
+
+if(!params$multi_visit){
+  complete<-raw_chem |>
+  group_by(PROJECT) |> 
+  mutate(date = format(EVENT_DATETIME, "%Y-%m-%d"),
+         dry = case_when(
+           EVENT_SAMPLED %in% "FALSE" ~1,
+           TRUE~0)) |> 
+  select(SITE_CODE,PROJECT,date,EVENT_SAMPLED,dry) |> 
+  distinct() |> 
+  mutate(site_date = paste(SITE_CODE,date,sep = "_"),
+         total_trips = 1,
+         total_sites = length(unique(SITE_CODE)),
+         dry_sites = sum(dry))|>
+  ungroup() |> 
+  #filter(EVENT_SAMPLED %in% TRUE) |> 
+  group_by(PROJECT) |>
+  summarise(n_samples=n(),
+            sites_in_survey = total_sites,
+            total_trips = total_trips,
+            expected_events = sites_in_survey * total_trips,
+            dry_sites = expected_events - n_samples,
+            completeness = (100-(dry_sites/expected_events) * 100)) |> 
+  distinct()
+}
+
 
 # Create a Word-friendly table
 ft <- flextable::flextable(complete)
@@ -118,8 +154,8 @@ ft <- flextable::autofit(ft) # Adjust column widths
 ft <- flextable::theme_vanilla(ft) # Clean style
 ft <- flextable::highlight(
   ft,
-  i = ~ freq < 80,       # Rows where Score > 90
-  j = "freq",            # Column to highlight
+  i = ~ completeness < 80,       # Rows where Score > 90
+  j = "completeness",            # Column to highlight
   color = "red"             
 )
 
@@ -127,7 +163,7 @@ ft
 
 ```
 
-this table summarizes the DQI's identified in the QAPP
+this table summarizes all the flags or DQI's identified in the QAPP
 
 ```{r overall_summary}
 
@@ -138,24 +174,27 @@ overall_summary<-raw_chem |>
   ungroup() |> 
   group_by(PARAMETER_NAME,FRACTION,RESULT_QUALIFIER) |> 
   summarise(n=n(),
-            frequency = (n/total)*100) |> 
+            total = total) |> 
   distinct()
+
+overall_summary<-overall_summary |> 
+   select(PARAMETER_NAME, FRACTION,RESULT_QUALIFIER,everything()) |> 
+  tidyr::pivot_wider(names_from = RESULT_QUALIFIER,
+              values_from = n) |> 
+  relocate(total, .after = last_col())
+ 
 
 # Create a Word-friendly table
 ft <- flextable::flextable(overall_summary)
 ft <- flextable::autofit(ft) # Adjust column widths
 ft <- flextable::theme_vanilla(ft) # Clean style
-ft <- flextable::highlight(
-  ft,
-  i = ~ RESULT_QUALIFIER %in% "R",       # Rows where Score > 90
-  j = "RESULT_QUALIFIER",            # Column to highlight
-  color = "red"             
-)
 
 ft
 ```
 
 # rejected samples - DQI's
+
+this summarizes the rejected values for each project by parameter.
 
 ```{r check for DQIs}
 #rejects 
@@ -173,6 +212,7 @@ rejects_table<-rejects |>
          SASS_NOTES, 
          LAB_QUALIFIER) |> 
   distinct() |> 
+  group_by(PARAMETER_NAME,FRACTION) |> 
   mutate(holding_time = case_match(
     HOLDING_TIME_QUALIFIER,
     "reject" ~ 1,
@@ -191,7 +231,13 @@ rejects_table<-rejects |>
          equipment_blanks,
          MSMSD,
          holding_time) |> 
-  mutate(total = sum(c_across(c(holding_time,equipment_blanks,MSMSD))))
+  summarise(equipment_blanks = sum(equipment_blanks),
+            MSMSD = sum(MSMSD),
+            holding_time = sum(holding_time),
+    total_rejected_samples = sum(c_across(c(holding_time,equipment_blanks,MSMSD))))
+  
+
+
 
 # Create a Word-friendly table
 ft2 <- flextable::flextable(rejects_table)
@@ -216,8 +262,8 @@ ft2 <- flextable::highlight(
 )
 ft2 <- flextable::highlight(
   ft2,
-  i = ~ total >0,       # Rows where Score > 90
-  j = "total",          # Column to highlight
+  i = ~ total_rejected_samples >0,       # Rows where Score > 90
+  j = "total_rejected_samples",          # Column to highlight
   color = "red"             
 )
 #had to do this for each one - there is probably a better way to do this
@@ -232,14 +278,91 @@ ft2
 
 ```
 
+this table summarizes the overall failure rate associated with each type of qa sample
+
+```{r overall-failure-rates}
+rejects_table_totals<-qc |> 
+  select(PARAMETER_NAME,
+         FRACTION, 
+         SASS_RECOMMENDED_QUALIFIER,
+         HOLDING_TIME_QUALIFIER,
+         MATRIX_SPIKE_QUALIFIER,
+         EQUIPMENT_BLANK_QUALIFIER,
+         SASS_SCOPE_OF_APPLICABILITY,
+         SASS_NOTES, 
+         LAB_QUALIFIER) |> 
+  distinct() |> 
+  group_by(PARAMETER_NAME) |> 
+  mutate(holding_time_total = case_match(
+    HOLDING_TIME_QUALIFIER,
+    c("reject","accept") ~ 1,
+    .default = 0),
+    MSMSD_total  = case_match(
+      MATRIX_SPIKE_QUALIFIER,
+      c("reject","accept") ~ 1,
+      .default = 0)) |> 
+  mutate(equipment_blanks_total = case_match(
+    EQUIPMENT_BLANK_QUALIFIER,
+    c("reject","accept") ~ 1,
+    .default = 0
+  )) |> 
+  select(PARAMETER_NAME,
+         FRACTION,
+         equipment_blanks_total,
+         MSMSD_total,
+         holding_time_total) |> 
+    summarise(holding_time_total = sum(holding_time_total),
+              equipment_blanks_total = sum(equipment_blanks_total),
+              MSMSD_total = sum(MSMSD_total),
+              total_QA_SAMPLES = n())
+
+
+
+failure_rates<-merge(rejects_table,rejects_table_totals)
+failure_rates<-failure_rates |> 
+  distinct()
+
+failure_rates<-failure_rates |> 
+  group_by(PARAMETER_NAME, FRACTION) |> 
+  summarise(eb_failures = (equipment_blanks/equipment_blanks_total) *100,
+            msmsd_failures = (MSMSD/MSMSD_total)*100,
+            holding_time_failures = (holding_time/holding_time_total)*100,
+            total_QA_samples = total_QA_SAMPLES,
+            .groups = "drop")
+
+#replace the inf and NAs
+
+failure_rates[failure_rates == Inf] <- NA
+failure_rates[is.na(failure_rates)] <- NA
+
+failure_rates<-failure_rates |> 
+  mutate(across(where(is.numeric),~round(.x,2)))
+
+# Create a Word-friendly table
+ft_rates <- flextable::flextable(failure_rates)
+# Highlight specific cells by condition
+ft_rates <- flextable::highlight(
+  ft_rates,
+  i = ~ msmsd_failures >=80,       # Rows where Score > 90
+  j = "msmsd_failures",          # Column to highlight
+  color = "red"             
+)
+#had to do this for each one - there is probably a better way to do this
+
+ft_rates <- flextable::autofit(ft_rates) # Adjust column widths
+ft_rates <- flextable::theme_vanilla(ft_rates) # Clean style
+
+ft_rates
+```
+
 # Results Site specific rejected values
 
-do we need these?
+these are all of hte rejected samples including site code - not sure if we want to include these
 
 ```{r specific rejected values}
 #make 2 tables, one with the final flags and stuff, one with teh SASS recs
 raw_filtered_table<-raw_chem |>
-  dplyr::filter(RESULT_QUALIFIER %in% c("R", "J+", "J-", "T")) |>
+  dplyr::filter(RESULT_QUALIFIER %in% c("R")) |>
   dplyr::select(PROJECT,
          SITE_CODE,
          PARAMETER_NAME,FRACTION,

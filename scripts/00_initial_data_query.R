@@ -17,22 +17,6 @@ obt_result_dir <- file.path(
   "obt_result_including_rejects.parquet" #this is the parquet that has ALL of the data to get the rejects for the DUAR review as well
 )
 
-qa_dir <- file.path(
-  "L:",
-  "DOW",
-  "BWAM Share",
-  "data",
-  "parquet",
-  "analytical_table_store",
-  "obt_result_including_rejects.parquet" #this is the parquet that has ALL of the data to get the rejects for the DUAR review as well
-)
-
-
-# Directory ---------------------------------------------------------------
-dir <- file.path("L:", "DOW", "BWAM Share", "data", "parquet", "qc")
-
-# Get a list of files in the directory.
-list.files(dir)
 
 # Extract -----------------------------------------------------------------
 
