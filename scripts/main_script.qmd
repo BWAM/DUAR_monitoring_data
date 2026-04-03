@@ -17,6 +17,7 @@ First we'll grab the data, if you don't know your project's name, you can find a
 
 ```{r grab-data., message=FALSE, warning=FALSE}
 library(flextable)
+library(ggplot2)
 library(dplyr)
 source(here::here("scripts/00_initial_data_query.R")) #this grabs the parquet file here - "L:\DOW\BWAM Share\data\parquet\analytical_table_store\obt_result_including_rejects.parquet"
 #plus the QA data
@@ -395,3 +396,34 @@ ft3
 Suggested wording
 
 The evaluations described in this DUAR indicate that the data are of sufficient quality to meet the project objectives. The intended use of the data is to establish a baseline to inform NYSDEC Division of Water’s priorities for water quality monitoring through the RIBS monitoring program. Impacts to data quality occurred infrequently and any impacts toward usability were indicated as DOW qualifiers and notes.
+
+# Project Snapshot
+
+```{r chem_snapshot, fig.height=7,fig.width=14}
+options(scipen = 9999)
+
+plots<-raw_chem |> 
+  filter(!RESULT_QUALIFIER %in% "R") |> 
+  mutate(full_title = paste(PARAMETER_NAME,UNIT,sep = " ")) |> 
+  group_by(SITE_CODE, full_title) |> 
+  summarise(median = median (RESULT_VALUE,na.rm = TRUE),
+            BASIN = BASIN) |> 
+  arrange(BASIN) |> 
+  mutate(SITE_CODE = as.factor(SITE_CODE))
+
+plot_num = length(unique(plots$full_title))/4
+
+plot<-ggplot(plots,aes(x = SITE_CODE, 
+                         y = median))+
+  geom_point()+
+   theme(
+    axis.text.x = element_blank(),  # Remove text labels
+    axis.ticks.x = element_blank()  # Remove tick marks
+  )+
+  facet_wrap(vars(full_title),scales = "free")
+
+plot
+plotly::ggplotly(plot)
+
+```
+
