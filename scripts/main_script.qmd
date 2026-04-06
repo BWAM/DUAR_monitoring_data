@@ -1,6 +1,7 @@
 ---
 title: "main_script"
-format: docx
+#format: docx
+format: html
 editor: visual
 execute: 
   warning: false
@@ -8,7 +9,7 @@ execute:
 params:
   date_start: "2025-01-01"
   date_end: "2026-01-01"
-  multi_visit: TRUE
+  multi_visit: FALSE
 ---
 
 # start
@@ -32,7 +33,7 @@ range(all_df$EVENT_DATETIME)
 unique(all_df$PROJECT)
 
 raw_chem<-all_df |> 
-  filter(PROJECT %in% c( "Ischua Creek"     ),
+  filter(PROJECT %in% c( "Lake Probability Sampling 2024-2025"        ),
          SAMPLE_TYPE %in% "chemistry")
 
 sdgs<-unique(raw_chem$SAMPLE_DELIVERY_GROUP)
@@ -55,6 +56,9 @@ The project was implemented following the procedures described in QAPP RIBS-0001
 qc <- open_dataset(file.path(dir, "QC_CLEAN.parquet")) |> 
  filter(SAMPLE_DELIVERY_GROUP %in% sdgs) |>
   collect()
+
+ms<-qc |> 
+  filter(MATRIX_SPIKE_QUALIFIER %in% c("accept","reject","trend"))
 
 ```
 
@@ -169,6 +173,7 @@ this table summarizes all the flags or DQI's identified in the QAPP
 ```{r overall_summary}
 
 overall_summary<-raw_chem |> 
+  filter(!PARAMETER_NAME %in% c("ph of color analysis","ph_for_color_analysis" )) |> 
   group_by(PARAMETER_NAME,FRACTION) |> 
   mutate(num = 1,
          total = sum(num)) |> 
@@ -197,159 +202,40 @@ ft
 
 this summarizes the rejected values for each project by parameter.
 
-```{r check for DQIs}
-#rejects 
-rejects<-qc |> 
-  filter(SASS_RECOMMENDED_QUALIFIER %in% "reject")
+## Percent of total QA sample rates
+```{r}
 
-rejects_table<-rejects |> 
-  select(PARAMETER_NAME,
-         FRACTION, 
-         SASS_RECOMMENDED_QUALIFIER,
-         HOLDING_TIME_QUALIFIER,
-         MATRIX_SPIKE_QUALIFIER,
-         EQUIPMENT_BLANK_QUALIFIER,
-         SASS_SCOPE_OF_APPLICABILITY,
-         SASS_NOTES, 
-         LAB_QUALIFIER) |> 
-  distinct() |> 
-  group_by(PARAMETER_NAME,FRACTION) |> 
-  mutate(holding_time = case_match(
-    HOLDING_TIME_QUALIFIER,
-    "reject" ~ 1,
-    .default = 0),
-    MSMSD  = case_match(
-      MATRIX_SPIKE_QUALIFIER,
-      "reject"~ 1,
-      .default = 0)) |> 
-  mutate(equipment_blanks = case_match(
-    EQUIPMENT_BLANK_QUALIFIER,
-    "reject" ~ 1,
-    .default = 0
-  )) |> 
-  select(PARAMETER_NAME,
-         FRACTION,
-         equipment_blanks,
-         MSMSD,
-         holding_time) |> 
-  summarise(equipment_blanks = sum(equipment_blanks),
-            MSMSD = sum(MSMSD),
-            holding_time = sum(holding_time),
-    total_rejected_samples = sum(c_across(c(holding_time,equipment_blanks,MSMSD))))
-  
+total_samples_by_test<-qc |> 
+    filter(!PARAMETER_NAME %in% c("ph of color analysis","ph_for_color_analysis" )) |> 
+  select(SAMPLE_NAME, PARAMETER_NAME, FRACTION, HOLDING_TIME_QUALIFIER,
+         MATRIX_SPIKE_QUALIFIER, EQUIPMENT_BLANK_QUALIFIER) |> 
+  tidyr::pivot_longer(cols = -c(SAMPLE_NAME, PARAMETER_NAME, FRACTION), values_to = "value", names_to = "qc_test") |> 
+  filter(!is.na(value)) |> 
+  group_by(qc_test, PARAMETER_NAME, FRACTION) |> 
+  tally()
+##
+qualifier_count<-qc |> 
+  select(SAMPLE_NAME, PARAMETER_NAME, FRACTION, HOLDING_TIME_QUALIFIER,
+         MATRIX_SPIKE_QUALIFIER, EQUIPMENT_BLANK_QUALIFIER) |> 
+  tidyr::pivot_longer(cols = -c(SAMPLE_NAME, PARAMETER_NAME, FRACTION), values_to = "value", names_to = "qc_test") |> 
+  filter(!is.na(value)) |> 
+  group_by(PARAMETER_NAME, FRACTION, qc_test, value) |> 
+  count()
 
-
+qc_table_summary<-qualifier_count |> 
+  rename(count = n) |> 
+  left_join(total_samples_by_test) |> 
+  rename(total_samples = n) |> 
+  mutate(percent = round((count/total_samples)*100))
 
 # Create a Word-friendly table
-ft2 <- flextable::flextable(rejects_table)
-# Highlight specific cells by condition
-ft2 <- flextable::highlight(
-  ft2,
-  i = ~ equipment_blanks >0,       # Rows where Score > 90
-  j = "equipment_blanks",          # Column to highlight
-  color = "gold"             
-)
-ft2 <- flextable::highlight(
-  ft2,
-  i = ~ MSMSD >0,       # Rows where Score > 90
-  j = "MSMSD",          # Column to highlight
-  color = "gold"             
-)
-ft2 <- flextable::highlight(
-  ft2,
-  i = ~ holding_time >0,       # Rows where Score > 90
-  j = "holding_time",          # Column to highlight
-  color = "gold"             
-)
-ft2 <- flextable::highlight(
-  ft2,
-  i = ~ total_rejected_samples >0,       # Rows where Score > 90
-  j = "total_rejected_samples",          # Column to highlight
-  color = "red"             
-)
-#had to do this for each one - there is probably a better way to do this
-
-ft2 <- flextable::autofit(ft2) # Adjust column widths
-ft2 <- flextable::theme_vanilla(ft2) # Clean style
-
-ft2
-
-
-
-
-```
-
-this table summarizes the overall failure rate associated with each type of qa sample
-
-```{r overall-failure-rates}
-rejects_table_totals<-qc |> 
-  select(PARAMETER_NAME,
-         FRACTION, 
-         SASS_RECOMMENDED_QUALIFIER,
-         HOLDING_TIME_QUALIFIER,
-         MATRIX_SPIKE_QUALIFIER,
-         EQUIPMENT_BLANK_QUALIFIER,
-         SASS_SCOPE_OF_APPLICABILITY,
-         SASS_NOTES, 
-         LAB_QUALIFIER) |> 
-  distinct() |> 
-  group_by(PARAMETER_NAME) |> 
-  mutate(holding_time_total = case_match(
-    HOLDING_TIME_QUALIFIER,
-    c("reject","accept") ~ 1,
-    .default = 0),
-    MSMSD_total  = case_match(
-      MATRIX_SPIKE_QUALIFIER,
-      c("reject","accept") ~ 1,
-      .default = 0)) |> 
-  mutate(equipment_blanks_total = case_match(
-    EQUIPMENT_BLANK_QUALIFIER,
-    c("reject","accept") ~ 1,
-    .default = 0
-  )) |> 
-  select(PARAMETER_NAME,
-         FRACTION,
-         equipment_blanks_total,
-         MSMSD_total,
-         holding_time_total) |> 
-    summarise(holding_time_total = sum(holding_time_total),
-              equipment_blanks_total = sum(equipment_blanks_total),
-              MSMSD_total = sum(MSMSD_total),
-              total_QA_SAMPLES = n())
-
-
-
-failure_rates<-merge(rejects_table,rejects_table_totals)
-failure_rates<-failure_rates |> 
-  distinct()
-
-failure_rates<-failure_rates |> 
-  group_by(PARAMETER_NAME, FRACTION) |> 
-  summarise(eb_failures = (equipment_blanks/equipment_blanks_total) *100,
-            msmsd_failures = (MSMSD/MSMSD_total)*100,
-            holding_time_failures = (holding_time/holding_time_total)*100,
-            total_QA_samples = total_QA_SAMPLES,
-            .groups = "drop")
-
-#replace the inf and NAs
-
-failure_rates[failure_rates == Inf] <- NA
-failure_rates[is.na(failure_rates)] <- NA
-
-failure_rates<-failure_rates |> 
-  mutate(across(where(is.numeric),~round(.x,2)))
-
-# Create a Word-friendly table
-ft_rates <- flextable::flextable(failure_rates)
-# Highlight specific cells by condition
+ft_rates <- flextable::flextable(qc_table_summary)
 ft_rates <- flextable::highlight(
   ft_rates,
-  i = ~ msmsd_failures >=80,       # Rows where Score > 90
-  j = "msmsd_failures",          # Column to highlight
+  i = ~ value %in% "reject",       # Rows where Score > 90
+  j = "value",          # Column to highlight
   color = "red"             
 )
-#had to do this for each one - there is probably a better way to do this
-
 ft_rates <- flextable::autofit(ft_rates) # Adjust column widths
 ft_rates <- flextable::theme_vanilla(ft_rates) # Clean style
 

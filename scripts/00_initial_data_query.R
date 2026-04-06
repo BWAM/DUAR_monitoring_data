@@ -17,6 +17,7 @@ obt_result_dir <- file.path(
   "obt_result_including_rejects.parquet" #this is the parquet that has ALL of the data to get the rejects for the DUAR review as well
 )
 
+dir <- file.path("L:", "DOW", "BWAM Share", "data", "parquet", "qc")
 
 # Extract -----------------------------------------------------------------
 
