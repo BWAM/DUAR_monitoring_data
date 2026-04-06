@@ -8,7 +8,7 @@ execute:
 params:
   date_start: "2025-01-01"
   date_end: "2026-01-01"
-  multi_visit: FALSE
+  multi_visit: TRUE
 ---
 
 # start
@@ -32,7 +32,7 @@ range(all_df$EVENT_DATETIME)
 unique(all_df$PROJECT)
 
 raw_chem<-all_df |> 
-  filter(PROJECT %in% c( "Lake Probability Sampling 2024-2025"     ),
+  filter(PROJECT %in% c( "Ischua Creek"     ),
          SAMPLE_TYPE %in% "chemistry")
 
 sdgs<-unique(raw_chem$SAMPLE_DELIVERY_GROUP)
@@ -422,7 +422,6 @@ plot<-ggplot(plots,aes(x = SITE_CODE,
   )+
   facet_wrap(vars(full_title),scales = "free")
 
-plot
 plotly::ggplotly(plot)
 
 ```
