@@ -9,7 +9,6 @@ execute:
 params:
   date_start: "2025-01-01"
   date_end: "2026-01-01"
-  multi_visit: FALSE
 ---
 
 # start
@@ -102,55 +101,18 @@ Completeness - this uses the \# of dry sites to evaluate the success of the comp
 
 ```{r completeness}
 
-if(params$multi_visit){
-  complete<-raw_chem |>
-  group_by(PROJECT) |> 
-  mutate(date = format(EVENT_DATETIME, "%Y-%m-%d"),
-         dry = case_when(
-           EVENT_SAMPLED %in% "FALSE" ~1,
-           TRUE~0)) |> 
-  select(SITE_CODE,PROJECT,date,EVENT_SAMPLED,dry) |> 
-  distinct() |> 
-  mutate(site_date = paste(SITE_CODE,date,sep = "_"),
-         total_trips = length(unique(date)),
-         total_sites = length(unique(SITE_CODE)),
-         dry_sites = sum(dry))|>
-  ungroup() |> 
-  #filter(EVENT_SAMPLED %in% TRUE) |> 
-  group_by(PROJECT) |>
-  summarise(n_samples=n(),
-            sites_in_survey = total_sites,
-            total_trips = total_trips,
-            expected_events = sites_in_survey * total_trips,
-            dry_sites = expected_events - n_samples,
-            completeness = (100-(dry_sites/expected_events) * 100)) |> 
-  distinct()
-}
+expected_events_by_project<-events |> 
+    mutate(SITE_CODE = stringr::str_extract(EVENT_ID, "^[^_]+_[^_]+")) |> 
+    group_by(PROJECT) |> 
+    count(name = "expected_sample_count")
 
-if(!params$multi_visit){
-  complete<-raw_chem |>
-  group_by(PROJECT) |> 
-  mutate(date = format(EVENT_DATETIME, "%Y-%m-%d"),
-         dry = case_when(
-           EVENT_SAMPLED %in% "FALSE" ~1,
-           TRUE~0)) |> 
-  select(SITE_CODE,PROJECT,date,EVENT_SAMPLED,dry) |> 
-  distinct() |> 
-  mutate(site_date = paste(SITE_CODE,date,sep = "_"),
-         total_trips = 1,
-         total_sites = length(unique(SITE_CODE)),
-         dry_sites = sum(dry))|>
-  ungroup() |> 
-  #filter(EVENT_SAMPLED %in% TRUE) |> 
-  group_by(PROJECT) |>
-  summarise(n_samples=n(),
-            sites_in_survey = total_sites,
-            total_trips = total_trips,
-            expected_events = sites_in_survey * total_trips,
-            dry_sites = expected_events - n_samples,
-            completeness = (100-(dry_sites/expected_events) * 100)) |> 
-  distinct()
-}
+  complete<-raw_chem |> 
+    distinct(EVENT_ID, PROJECT) |> 
+    group_by(PROJECT) |> 
+    count(name = "lab_sample_count") |> 
+    left_join(expected_events_by_project) |> 
+    group_by(PROJECT) |> 
+    mutate(completeness = (lab_sample_count/expected_sample_count)*100)
 
 
 # Create a Word-friendly table
@@ -203,6 +165,7 @@ ft
 this summarizes the rejected values for each project by parameter.
 
 ## Percent of total QA sample rates
+
 ```{r}
 
 total_samples_by_test<-qc |> 
@@ -311,4 +274,3 @@ plot<-ggplot(plots,aes(x = SITE_CODE,
 plotly::ggplotly(plot)
 
 ```
-
