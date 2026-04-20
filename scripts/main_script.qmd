@@ -24,6 +24,7 @@ source(here::here("scripts/00_initial_data_query.R")) #this grabs the parquet fi
 
 ```
 
+
 check the range and project list - enter/change your project here
 
 ```{r initial-check}
@@ -38,6 +39,17 @@ raw_chem<-all_df |>
 sdgs<-unique(raw_chem$SAMPLE_DELIVERY_GROUP)
 
 ```
+```{r}
+
+#read in the qc file and the SDGs that apply
+qc <- open_dataset(file.path(dir, "QC_CLEAN.parquet")) |> 
+ filter(SAMPLE_DELIVERY_GROUP %in% sdgs) |>
+  collect() |> 
+  filter(PARAMETER_NAME %in% c("ph for color analysis", "ph_for_color_analysis", "ph of color analysis") == FALSE)
+
+
+```
+
 
 ## Changes from the QAPP
 
@@ -71,6 +83,7 @@ qc_counts<-qc |>
   group_by(PROJECT) |> 
   reframe(matrix_spike = sum(ms),
           equipment_blank = sum(eb))
+
 
 qc_percentages<-qc_counts|> 
   left_join(total_samples, by = "PROJECT") |> 
@@ -180,13 +193,12 @@ this table summarizes all the flags or DQI's identified in the QAPP
 ```{r overall_summary}
 
 overall_summary<-raw_chem |> 
-  filter(!PARAMETER_NAME %in% c("ph of color analysis","ph_for_color_analysis" )) |> 
   group_by(PARAMETER_NAME,FRACTION) |> 
   mutate(num = 1,
          total = sum(num)) |> 
   ungroup() |> 
   group_by(PARAMETER_NAME,FRACTION,RESULT_QUALIFIER) |> 
-  summarise(n=n(),
+  reframe(n=n(),
             total = total) |> 
   distinct()
 
@@ -214,7 +226,6 @@ this summarizes the rejected values for each project by parameter.
 ```{r}
 
 total_samples_by_test<-qc |> 
-    filter(!PARAMETER_NAME %in% c("ph of color analysis","ph_for_color_analysis" )) |> 
   select(SAMPLE_NAME, PARAMETER_NAME, FRACTION, HOLDING_TIME_QUALIFIER,
          MATRIX_SPIKE_QUALIFIER, EQUIPMENT_BLANK_QUALIFIER) |> 
   tidyr::pivot_longer(cols = -c(SAMPLE_NAME, PARAMETER_NAME, FRACTION), values_to = "value", names_to = "qc_test") |> 
@@ -230,11 +241,13 @@ qualifier_count<-qc |>
   group_by(PARAMETER_NAME, FRACTION, qc_test, value) |> 
   count()
 
+
 qc_table_summary<-qualifier_count |> 
   rename(count = n) |> 
   left_join(total_samples_by_test) |> 
   rename(total_samples = n) |> 
-  mutate(percent = round((count/total_samples)*100))
+  mutate(percent_of_project = round((count/total_samples)*100)) |> 
+  filter(value %in% "reject")
 
 # Create a Word-friendly table
 ft_rates <- flextable::flextable(qc_table_summary)
