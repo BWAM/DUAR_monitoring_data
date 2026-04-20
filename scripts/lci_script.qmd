@@ -1,5 +1,5 @@
 ---
-title: "main_script"
+title: "lci_script"
 #format: docx
 format: html
 editor: visual
@@ -85,10 +85,25 @@ The project was implemented following the procedures described in QAPP RIBS-0001
 qc <- open_dataset(file.path(dir, "QC_CLEAN.parquet")) |> 
  filter(SAMPLE_DELIVERY_GROUP %in% sdgs) |>
   collect() |> 
-  filter(PARAMETER_NAME != "ph_for_color_analysis")
+  filter(PARAMETER_NAME %in% c("ph for color analysis", "ph_for_color_analysis", "ph of color analysis") == FALSE)
 
 ms<-qc |> 
   filter(MATRIX_SPIKE_QUALIFIER %in% c("accept","reject","trend"))
+
+eb_msmsd<-open_dataset(file.path(dir, "QC_CLEAN.parquet")) |> 
+ filter(SAMPLE_DELIVERY_GROUP %in% sdgs) |>
+  collect() |> 
+  filter(PARAMETER_NAME %in% c("ph for color analysis", "ph_for_color_analysis", "ph of color analysis") == FALSE)
+
+combined_key_files <- read_csv("C:/Users/mpkraft/New York State Office of Information Technology Services/LMAS - LCI/2025.field.season.files/Survey.data.for.LCI/combined.key.files.csv", 
+     col_types = cols(Key = col_character())) |> 
+  select(Key, Site.ID, Info.Type) |> 
+  mutate(Info.Type = case_when(
+    Info.Type %in% "OW" ~ "open_water",
+    Info.Type %in% "BS" ~ "bottom_sample"
+  )) |> 
+  filter(Info.Type %in% c("open_water", "bottom_sample")) |> 
+  rename(SAMPLE_NAME = Key, SITE_CODE = Site.ID, SAMPLE_LOCATION = Info.Type)
 
 ```
 
@@ -126,13 +141,65 @@ Suggested wording
 
 Project Data Quality Objectives (DQOs) are from Section A7 of the QAPP referenced on Page 1. Table X(update) and Table x(update) summarize the analytical parameters collected for this project and the QC performance for each parameter against each DQO.
 
+Completeness - This assesses whether a sufficient percentage or number of QA/QC samples were collected and analyzed based on the criteria specified in the QAPP
+
+```{r QC targets}
+
+eb_count<-eb_msmsd|> 
+  left_join(combined_key_files) |> 
+  select(SAMPLE_NAME, SAMPLE_LOCATION, EQUIPMENT_BLANK_QUALIFIER) |>
+  filter(!is.na(EQUIPMENT_BLANK_QUALIFIER)) |> 
+  distinct(SAMPLE_NAME ,SAMPLE_LOCATION) |> 
+  group_by(SAMPLE_LOCATION) |> 
+  count(name="number_of_qc_samples") |> 
+  mutate(qc_type = "equipment_blank")
+
+
+msmsd_count<-eb_msmsd |>
+  filter(str_detect(SAMPLE_NAME, "-")) |>
+  separate(SAMPLE_NAME, into = c("SAMPLE_NAME", "SAMPLE_NAME_2"), sep = "-") |> 
+  left_join(combined_key_files) |>
+  distinct(SAMPLE_NAME ,SAMPLE_LOCATION, MATRIX_SPIKE_QUALIFIER) |> 
+  filter(!is.na(MATRIX_SPIKE_QUALIFIER)) |> 
+  group_by(SAMPLE_LOCATION) |> 
+  count(name="number_of_qc_samples") |> 
+  mutate(qc_type = "matrix_spike/matrix_spike_duplicate")
+
+total_samples<-raw_chem |> 
+  select(SAMPLE_NAME, SAMPLE_LOCATION) |> 
+  distinct() |> 
+  group_by(SAMPLE_LOCATION) |> 
+  count(name = "number_of_normal_samples")
+
+qc_percentages<-rbind(eb_count, msmsd_count) |> 
+  left_join(total_samples) |> 
+  group_by(SAMPLE_LOCATION, qc_type) |> 
+  mutate(qc_collection_rate = (number_of_qc_samples/number_of_normal_samples)*100)
+
+# Create a Word-friendly table
+ft <- flextable::flextable(qc_percentages)
+ft <- flextable::autofit(ft) # Adjust column widths
+ft <- flextable::theme_vanilla(ft) # Clean style
+ft <- flextable::highlight(
+  ft,
+  i = ~ qc_collection_rate < 5,       # Rows where Score < 5
+  j = "qc_collection_rate",            # Column to highlight
+  color = "red"             
+)
+
+ft
+
+
+```
+
 ## Summary Statement of DQO QC Exceedances
 
-Completeness - this uses the \# of dry sites to evaluate the success of the completeness metric
+Completeness - this uses the \# of intended vs. actually sampled sites to evaluate the success of the completeness metric
 
 ```{r completeness}
 
   expected_events_by_project<-expected_events |> 
+  distinct() |> 
     mutate(SITE_CODE = str_extract(EVENT_ID, "^[^_]+_[^_]+")) |> 
     group_by(PROJECT) |> 
     count(name = "expected_sample_count")
@@ -201,7 +268,6 @@ this summarizes the rejected values for each project by parameter.
 ```{r}
 
 total_samples_by_test<-qc |> 
-    filter(!PARAMETER_NAME %in% c("ph of color analysis","ph_for_color_analysis" )) |> 
   select(SAMPLE_NAME, PARAMETER_NAME, FRACTION, HOLDING_TIME_QUALIFIER,
          MATRIX_SPIKE_QUALIFIER, EQUIPMENT_BLANK_QUALIFIER) |> 
   tidyr::pivot_longer(cols = -c(SAMPLE_NAME, PARAMETER_NAME, FRACTION), values_to = "value", names_to = "qc_test") |> 
@@ -221,7 +287,8 @@ qc_table_summary<-qualifier_count |>
   rename(count = n) |> 
   left_join(total_samples_by_test) |> 
   rename(total_samples = n) |> 
-  mutate(percent = round((count/total_samples)*100))
+  mutate(percent = round((count/total_samples)*100)) |> 
+  filter(value %in% "reject")
 
 # Create a Word-friendly table
 ft_rates <- flextable::flextable(qc_table_summary)
@@ -235,6 +302,21 @@ ft_rates <- flextable::autofit(ft_rates) # Adjust column widths
 ft_rates <- flextable::theme_vanilla(ft_rates) # Clean style
 
 ft_rates
+
+
+# qc_overall_number<-qc |> 
+#   group_by(PARAMETER_NAME, FRACTION) |>
+#   count(name = "total_samples")
+# 
+# qc_overall_rejects<-qc |> 
+#   filter(SASS_RECOMMENDED_QUALIFIER %in% "reject") |> 
+#   group_by(PARAMETER_NAME, FRACTION) |>
+#   count(name = "total_rejected_samples")
+# 
+# qc_reject_percent<-qc_overall_number |> 
+#   left_join(qc_verall_rejects) |> 
+#   mutate(percent_reject = (total_rejected_samples/total_samples)*100)
+
 ```
 
 # Results Site specific rejected values
@@ -285,8 +367,8 @@ options(scipen = 9999)
 
 plots<-raw_chem |> 
   filter(!RESULT_QUALIFIER %in% "R") |> 
-  mutate(full_title = paste(PARAMETER_NAME,UNIT,sep = " ")) |> 
-  group_by(SITE_CODE, full_title) |> 
+  mutate(full_title = paste(PARAMETER_NAME, FRACTION, UNIT,sep = " ")) |> 
+  group_by(SITE_CODE, full_title, FRACTION) |> 
   summarise(median = median (RESULT_VALUE,na.rm = TRUE),
             BASIN = BASIN) |> 
   arrange(BASIN) |> 
