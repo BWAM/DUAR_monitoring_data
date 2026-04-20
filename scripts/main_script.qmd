@@ -32,7 +32,7 @@ range(all_df$EVENT_DATETIME)
 unique(all_df$PROJECT)
 
 raw_chem<-all_df |> 
-  filter(PROJECT %in% c( "Lake Probability Sampling 2024-2025"        ),
+  filter(PROJECT %in% c( "RIBS Screening - Mohawk"),
          SAMPLE_TYPE %in% "chemistry")
 
 sdgs<-unique(raw_chem$SAMPLE_DELIVERY_GROUP)
@@ -43,23 +43,68 @@ sdgs<-unique(raw_chem$SAMPLE_DELIVERY_GROUP)
 
 the first section of the DUAR asks just about overall changed to teh QAPP - so schedule, goals, collection/field procedures. Use the QAPP to guide this section.
 
+```{r qc-rates}
+
+project<-raw_chem |> 
+  select(SAMPLE_DELIVERY_GROUP, PROJECT) |> 
+  distinct()
+
+total_samples<-raw_chem |> 
+  select(PROJECT,SAMPLE_NAME) |>
+  distinct() |> 
+  group_by(PROJECT) |> 
+  count(name = "number_of_normal_samples")
+
+qc_counts<-qc |> 
+  distinct(SAMPLE_DELIVERY_GROUP,MATRIX_SPIKE_QUALIFIER,EQUIPMENT_BLANK_QUALIFIER,SAMPLE_NAME) |> 
+  left_join(project, by = "SAMPLE_DELIVERY_GROUP") |> 
+  group_by(PROJECT, SAMPLE_DELIVERY_GROUP, SAMPLE_NAME) |> 
+  reframe(ms = case_when(MATRIX_SPIKE_QUALIFIER %in% c("accept","reject", "trend")~1,
+                        TRUE ~0),
+         eb = case_when(EQUIPMENT_BLANK_QUALIFIER %in% c("accept", "reject", "trend")~1,
+                      TRUE ~ 0)) |> 
+    distinct(PROJECT,SAMPLE_DELIVERY_GROUP,ms,eb) |> 
+  group_by(PROJECT, SAMPLE_DELIVERY_GROUP) |> 
+  reframe(ms = max(ms),
+          eb = max(eb)) |> 
+  ungroup() |> 
+  group_by(PROJECT) |> 
+  reframe(matrix_spike = sum(ms),
+          equipment_blank = sum(eb))
+
+qc_percentages<-qc_counts|> 
+  left_join(total_samples, by = "PROJECT") |> 
+  mutate(eb_collection_rate = round((equipment_blank/number_of_normal_samples)*100),
+         ms_collection_rate = round((matrix_spike/number_of_normal_samples)*100))
+ 
+# Create a Word-friendly table
+ft <- flextable::flextable(qc_percentages)
+ft <- flextable::autofit(ft) # Adjust column widths
+ft <- flextable::theme_vanilla(ft) # Clean style
+ft <- flextable::highlight(
+  ft,
+  i = ~ eb_collection_rate < 5,       # Rows where Score < 5
+  j = "eb_collection_rate",            # Column to highlight
+  color = "red"             
+)
+ft <- flextable::highlight(
+  ft,
+  i = ~ ms_collection_rate < 5,       # Rows where Score < 5
+  j = "ms_collection_rate",            # Column to highlight
+  color = "red"             
+)
+
+ft
+```
+
+
 ## Section 1.4. Deviations from the QAPP
 
 Suggested wording
 
 The project was implemented following the procedures described in QAPP RIBS-0001_V25. The DUAR details QAPP deviations associated with data collection, review, verification, and validation by evaluating Data Quality Indicators (DQIs) of precision, accuracy, completeness, comparability, and representativeness. Data largely met QC specifications; however, there were some deviations. Data usability is indicated for each result as: unacceptable for use, data rejected (R), acceptable for trend analysis only due to minor deviations (T), or fully acceptable for all uses (A). Specific qualifier derivation procedures are described in the QAPP and in SOP-GEN-#110. The intended use of these data is to establish a baseline informing NYSDEC Division of Water’s priorities for water quality standard development and to provide a statewide characterization of CECs. The majority of the data meet the DQO requirements stated in the QAPP and are usable for the stated project objectives. Any data quality issues, site changes, or modifications are noted within this DUAR and through DOW qualifiers associated with the data to indicate use limitations. Sample precision and accuracy were evaluated through sample matrix spike/matrix spike duplicates (MS/MSDs) and sample surrogate recoveries for applicable analytical methods (EPA Methods 1633A, 300.1, and 8270D or E SIM). Laboratory performance was evaluated by examining laboratory QC flags, case narratives, laboratory method blank (LMB) detections, and surrogate/internal standard percent recoveries when applicable. Deviations from the acceptable criteria were noted and associated environmental samples were qualified following procedures described in SOP-GEN-#110 Data Validation and Verification and the associated QAPP.
 
-```{r}
 
-#read in the qc file and the SDGs that apply
-qc <- open_dataset(file.path(dir, "QC_CLEAN.parquet")) |> 
- filter(SAMPLE_DELIVERY_GROUP %in% sdgs) |>
-  collect()
-
-ms<-qc |> 
-  filter(MATRIX_SPIKE_QUALIFIER %in% c("accept","reject","trend"))
-
-```
 
 ## Section 2 - Data review
 
@@ -253,8 +298,8 @@ options(scipen = 9999)
 
 plots<-raw_chem |> 
   filter(!RESULT_QUALIFIER %in% "R") |> 
-  mutate(full_title = paste(PARAMETER_NAME,UNIT,sep = " ")) |> 
-  group_by(SITE_CODE, full_title) |> 
+  mutate(full_title = paste(PARAMETER_NAME, FRACTION, UNIT,sep = " ")) |> 
+  group_by(SITE_CODE, full_title, FRACTION) |> 
   summarise(median = median (RESULT_VALUE,na.rm = TRUE),
             BASIN = BASIN) |> 
   arrange(BASIN) |> 
@@ -272,5 +317,4 @@ plot<-ggplot(plots,aes(x = SITE_CODE,
   facet_wrap(vars(full_title),scales = "free")
 
 plotly::ggplotly(plot)
-
 ```
