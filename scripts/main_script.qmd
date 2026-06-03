@@ -24,7 +24,6 @@ source(here::here("scripts/00_initial_data_query.R")) #this grabs the parquet fi
 
 ```
 
-
 check the range and project list - enter/change your project here
 
 ```{r initial-check}
@@ -33,12 +32,13 @@ range(all_df$EVENT_DATETIME)
 unique(all_df$PROJECT)
 
 raw_chem<-all_df |> 
-  filter(PROJECT %in% c( "RIBS Screening - Mohawk"),
+  filter(PROJECT %in% c( "Sleepy Hollow Tributary Assessment"),
          SAMPLE_TYPE %in% "chemistry")
 
 sdgs<-unique(raw_chem$SAMPLE_DELIVERY_GROUP)
 
 ```
+
 ```{r}
 
 #read in the qc file and the SDGs that apply
@@ -49,7 +49,6 @@ qc <- open_dataset(file.path(dir, "QC_CLEAN.parquet")) |>
 
 
 ```
-
 
 ## Changes from the QAPP
 
@@ -62,7 +61,7 @@ project<-raw_chem |>
   distinct()
 
 total_samples<-raw_chem |> 
-  select(PROJECT,SAMPLE_NAME) |>
+  select(PROJECT,SITE_CODE, EVENT_DATETIME) |>
   distinct() |> 
   group_by(PROJECT) |> 
   count(name = "number_of_normal_samples")
@@ -110,14 +109,11 @@ ft <- flextable::highlight(
 ft
 ```
 
-
 ## Section 1.4. Deviations from the QAPP
 
 Suggested wording
 
 The project was implemented following the procedures described in QAPP RIBS-0001_V25. The DUAR details QAPP deviations associated with data collection, review, verification, and validation by evaluating Data Quality Indicators (DQIs) of precision, accuracy, completeness, comparability, and representativeness. Data largely met QC specifications; however, there were some deviations. Data usability is indicated for each result as: unacceptable for use, data rejected (R), acceptable for trend analysis only due to minor deviations (T), or fully acceptable for all uses (A). Specific qualifier derivation procedures are described in the QAPP and in SOP-GEN-#110. The intended use of these data is to establish a baseline informing NYSDEC Division of Water’s priorities for water quality standard development and to provide a statewide characterization of CECs. The majority of the data meet the DQO requirements stated in the QAPP and are usable for the stated project objectives. Any data quality issues, site changes, or modifications are noted within this DUAR and through DOW qualifiers associated with the data to indicate use limitations. Sample precision and accuracy were evaluated through sample matrix spike/matrix spike duplicates (MS/MSDs) and sample surrogate recoveries for applicable analytical methods (EPA Methods 1633A, 300.1, and 8270D or E SIM). Laboratory performance was evaluated by examining laboratory QC flags, case narratives, laboratory method blank (LMB) detections, and surrogate/internal standard percent recoveries when applicable. Deviations from the acceptable criteria were noted and associated environmental samples were qualified following procedures described in SOP-GEN-#110 Data Validation and Verification and the associated QAPP.
-
-
 
 ## Section 2 - Data review
 
