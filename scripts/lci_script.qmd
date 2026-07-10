@@ -95,7 +95,7 @@ eb_msmsd<-open_dataset(file.path(dir, "QC_CLEAN.parquet")) |>
   collect() |> 
   filter(PARAMETER_NAME %in% c("ph for color analysis", "ph_for_color_analysis", "ph of color analysis") == FALSE)
 
-combined_key_files <- read_csv("C:/Users/mpkraft/New York State Office of Information Technology Services/LMAS - LCI/2025.field.season.files/Survey.data.for.LCI/combined.key.files.csv", 
+combined_key_files <- read_csv("C:/Users/mpkraft/OneDrive - New York State Office of Information Technology Services/LMAS - LCI/2025.field.season.files/Survey.data.for.LCI/combined.key.files.csv", 
      col_types = cols(Key = col_character())) |> 
   select(Key, Site.ID, Info.Type) |> 
   mutate(Info.Type = case_when(
