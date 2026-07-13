@@ -1,0 +1,80 @@
+---
+title: "Calibration_day"
+format: html
+editor: visual
+execute: 
+  warning: false
+  echo: false
+params:
+  date_start: "2024-01-01"
+  date_end: "2026-01-01"
+---
+
+## Calibration Day
+
+This is a script that can process the calibration day RPD.
+
+```{r grab-data., message=FALSE, warning=FALSE}
+library(flextable)
+library(ggplot2)
+library(dplyr)
+source(here::here("scripts/00_initial_data_query.R")) #this grabs the parquet file here - "L:\DOW\BWAM Share\data\parquet\analytical_table_store\obt_result_including_rejects.parquet"
+#plus the QA data
+
+
+range(all_df$EVENT_DATETIME)
+unique(all_df$PROJECT)
+
+calib<-all_df |> 
+  filter(PROJECT %in% "Calibration Day" )
+
+
+```
+
+```{r work-up}
+
+calib2<-calib |> 
+  mutate(year = lubridate::year(EVENT_DATETIME)) |> 
+  group_by(year, EVENT_DATETIME, SITE_CODE,PARAMETER_NAME) |> 
+  reframe(n = n())
+
+#need to measure the RPD between each person is < 20%, what to do with multiple people...
+
+rpd<-calib |> 
+  mutate(year = lubridate::year(EVENT_DATETIME)) |> 
+  select(year, EVENT_DATETIME,SITE_CODE,PARAMETER_NAME, UNIT,METHOD_DETECTION_LIMIT, RESULT_VALUE) |> 
+  mutate(id = as.integer(factor(EVENT_DATETIME))) |> 
+  group_by(id,PARAMETER_NAME) |> 
+  mutate(result_value = mean(RESULT_VALUE, na.rm = TRUE)) |> 
+  select(-c(EVENT_DATETIME,RESULT_VALUE)) |> 
+  distinct()
+
+group_number = max(rpd$id)
+
+rpd2<-rpd|> 
+  filter(!result_value %in% "",
+         !result_value %in% NaN,
+         !is.na(result_value)) |> 
+  group_by(PARAMETER_NAME) |> 
+  reframe(max_result = max(result_value),
+         min_result = min(result_value),
+         rpd = (max_result - min_result)/((max_result + min_result)/2)*100)
+
+
+
+
+ 
+
+```
+
+## Parameters to flag for Sequential Duplicate RPD \> 20%
+
+```{r}
+
+
+rpd3<-rpd2 |> 
+  filter(rpd > 20)
+
+knitr::kable(rpd3)
+
+```

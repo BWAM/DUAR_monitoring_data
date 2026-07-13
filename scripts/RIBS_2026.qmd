@@ -1,0 +1,589 @@
+---
+title: "main_script"
+format: docx
+#format: html
+editor: visual
+params:
+  date_start: "2024-01-01"
+  date_end: "2026-01-01"
+  multi_visit: FALSE
+---
+
+# start
+
+First we'll grab the data, if you don't know your project's name, you can find all available project names in the initial-check chunk. Adjust the dates above in the parameters. This will constrain the data pull.
+
+```{r grab-data., message=FALSE, warning=FALSE}
+library(flextable)
+library(ggplot2)
+library(dplyr)
+source(here::here("scripts/00_initial_data_query.R")) #this grabs the parquet file here - "L:/DOW/BWAM Share/data/parquet/analytical_table_store/obt_result_including_rejects.parquet"
+#plus the QA data
+
+```
+
+check the range and project list - enter/change your project here
+
+```{r initial-check}
+
+range(all_df$EVENT_DATETIME)
+unique(all_df$PROJECT)
+
+raw_chem<-all_df |> 
+  filter(PROJECT %in% c( "RIBS Routine",
+                         "RIBS Screening - Ontario",
+                         "RIBS Screening - Mohawk",
+                         "RIBS Screening - Niagara" ,
+                         "Stream Probability Sampling 2024-2025",
+                         "RIBS Screening - St Lawrence",
+                         "RIBS Screening - Genesee",
+                         "RIBS Screening - Delaware" #to get the other probabilistic sites
+                         ),
+         SAMPLE_TYPE %in% "chemistry")
+
+
+#read in the probability sites so we can fix those -
+prob_sites<-read.csv("C:/Users/kareynol/OneDrive - New York State Office of Information Technology Services/MAS - Probability Surveys/2024-2025/c24_25_sites_weights.csv")
+
+raw_chem<-raw_chem |> 
+  mutate(PROJECT = case_when(SITE_CODE %in% prob_sites$SITE_CODE ~ "Stream Probability Sampling 2024-2025",
+                              TRUE ~ PROJECT))
+#take out the probability and then rebind together
+
+prob<-raw_chem |> 
+  filter(PROJECT %in% "Stream Probability Sampling 2024-2025") 
+
+prob_check<-raw_chem |> 
+  filter(PROJECT %in% "Stream Probability Sampling 2024-2025") |> 
+  mutate(year = lubridate::year(EVENT_DATETIME)) |> 
+  group_by(PARAMETER_NAME, year) |> 
+  reframe(n=length(unique(SITE_CODE)))
+
+rest<-raw_chem |> 
+  filter(!PROJECT %in% "Stream Probability Sampling 2024-2025") |> 
+  filter(EVENT_DATETIME > "2025-01-01")
+
+raw_chem<-rbind(prob,rest) #limiting everything else to 2025 (Routine and screening)
+
+
+sdgs<-unique(raw_chem$SAMPLE_DELIVERY_GROUP)
+
+
+```
+
+## Changes from the QAPP
+
+the first section of the DUAR asks just about overall changed to teh QAPP - so schedule, goals, collection/field procedures. Use the QAPP to guide this section.
+
+## Section 1.4. Deviations from the QAPP
+
+Suggested wording
+
+The project was implemented following the procedures described in QAPP RIBS-0001_V25. The DUAR details QAPP deviations associated with data collection, review, verification, and validation by evaluating Data Quality Indicators (DQIs) of precision, accuracy, completeness, comparability, and representativeness. Data largely met QC specifications; however, there were some deviations. Data usability is indicated for each result as: unacceptable for use, data rejected (R), acceptable for trend analysis only due to minor deviations (T), or fully acceptable for all uses (A). Specific qualifier derivation procedures are described in the QAPP and in SOP-GEN-#110. The intended use of these data is to establish a baseline informing NYSDEC Division of Water’s priorities for water quality standard development and to provide a statewide characterization of CECs. The majority of the data meet the DQO requirements stated in the QAPP and are usable for the stated project objectives. Any data quality issues, site changes, or modifications are noted within this DUAR and through DOW qualifiers associated with the data to indicate use limitations. Sample precision and accuracy were evaluated through sample matrix spike/matrix spike duplicates (MS/MSDs) and sample surrogate recoveries for applicable analytical methods (EPA Methods 1633A, 300.1, and 8270D or E SIM). Laboratory performance was evaluated by examining laboratory QC flags, case narratives, laboratory method blank (LMB) detections, and surrogate/internal standard percent recoveries when applicable. Deviations from the acceptable criteria were noted and associated environmental samples were qualified following procedures described in SOP-GEN-#110 Data Validation and Verification and the associated QAPP.
+
+```{r}
+
+#read in the qc file and the SDGs that apply
+qc <- open_dataset(file.path(dir, "QC_CLEAN.parquet")) |> 
+ filter(SAMPLE_DELIVERY_GROUP %in% sdgs) |>
+  collect()
+
+ms<-qc |> 
+  filter(MATRIX_SPIKE_QUALIFIER %in% c("accept","reject","trend"))
+
+
+```
+
+```{r prob_sites}
+sites_prob<-unique(prob_sites$SITE_CODE)
+
+sites_in_raw<-raw_chem |> 
+  filter(PROJECT %in% "Stream Probability Sampling 2024-2025")
+
+setdiff(sites_prob,unique(sites_in_raw$SITE_CODE))
+
+#perfect fixed these
+
+
+```
+
+
+```{r qc-rates}
+
+project<-raw_chem |> 
+  select(SAMPLE_DELIVERY_GROUP, PROJECT,EVENT_DATETIME) |> 
+  distinct()
+
+total_samples<-raw_chem |> 
+  select(PROJECT,SITE_CODE,EVENT_DATETIME) |>
+  distinct() |> 
+  group_by(PROJECT) |> 
+  count(name = "number_of_normal_samples")
+
+qc_counts<-qc |> 
+  left_join(project, by = "SAMPLE_DELIVERY_GROUP") |> 
+  group_by(PROJECT, SAMPLE_DELIVERY_GROUP,EVENT_DATETIME) |> 
+  reframe(ms = case_when(MATRIX_SPIKE_QUALIFIER %in% c("accept","reject","trend")~1,
+                        TRUE ~0),
+         eb = case_when(EQUIPMENT_BLANK_QUALIFIER %in% c("accept", "reject", "trend")~1,
+                      TRUE ~ 0)) |> 
+    distinct(PROJECT,SAMPLE_DELIVERY_GROUP,ms,eb) |> 
+  group_by(PROJECT, SAMPLE_DELIVERY_GROUP) |> 
+  reframe(ms = max(ms),
+          eb = max(eb)) |> 
+  ungroup() |> 
+  group_by(PROJECT) |> 
+  reframe(matrix_spike = sum(ms),
+          equipment_blank = sum(eb))
+
+qc_percentages<-qc_counts|> 
+  left_join(total_samples, by = "PROJECT") |> 
+  mutate(eb_collection_rate = round((equipment_blank/number_of_normal_samples)*100),
+         ms_collection_rate = round((matrix_spike/number_of_normal_samples)*100))
+ 
+# Create a Word-friendly table
+ft <- flextable::flextable(qc_percentages)
+ft <- flextable::autofit(ft) # Adjust column widths
+ft <- flextable::theme_vanilla(ft) # Clean style
+ft <- flextable::highlight(
+  ft,
+  i = ~ eb_collection_rate < 5,       # Rows where Score < 5
+  j = "eb_collection_rate",            # Column to highlight
+  color = "red"             
+)
+ft <- flextable::highlight(
+  ft,
+  i = ~ ms_collection_rate < 5,       # Rows where Score < 5
+  j = "ms_collection_rate",            # Column to highlight
+  color = "red"             
+)
+
+ft
+ 
+```
+
+## VSection 2 - Data review
+
+this section will get into the meat of the data validation and verification.
+
+Suggested wording
+
+## Section 2. ENVIRONMENTAL INFORMATION AND USABILITY DETERMINATION
+
+All data review was conducted by the Project Lead. Data were received from the contract laboratory (ALS-Environmental Rochester) for each sampling event as a level IV data package including an EDD (EQuIS v3 or v4 format as Batch, Sample, and TestResultQC as separate txt files) and two PDFs consisting of a full and summary laboratory report for each sample delivery group (SDG). The txt files were converted to CSVs for the “Sample” and “TestResultQC” for ease of viewing. Data were extracted and saved as CSVs for one set of “Sample” and “TestQCResult” per EDD and saved in the original EDD file folder for ease of use. Upon receipt, data packages were verified by the Project Lead using site lists derived from Survey123 documentation and COCs. Data packages were reviewed by the Project Lead to ensure all expected data were received, free of errors, and met DEC reporting specifications. Data were verified for completeness, correctness, and compliance with analytical objectives set in the QAPP by the WQMA data team. Data were then validated to determine if DQOs were met for individual results, and if results were of sufficient quality to meet the project objectives. Review included evaluating Sample surrogate recovery for applicable parameters, evaluating laboratory blanks, field blanks, and equipment blank detections with sample results, reviewing lab qualifiers, and MS/MSDs. Data usability was assigned for each result as: unacceptable for use data rejected (R), acceptable for trend analysis only due to minor deviations (T), or fully acceptable for all uses (A). Specific qualifier derivation procedures are described in the QAPP and in SOP-GEN-#110.
+
+## Section 2.1 Data Review
+
+Suggested wording
+
+(this section is pretty small) Checks for sample naming agreement and QC collection were confirmed for correctness and updated in the compiled data by the Project Lead.
+
+## Section 2.2 Data Verification
+
+Suggested wording
+
+Data Verification is a process in which data are checked for accuracy and inconsistencies after data are sent from the contract laboratory to NYSDEC to ensure data followed contractual requirements. The number and identity of field and QC samples were verified by comparing Survey123 records or event records with laboratory reports to calculate completeness. Any necessary modifications to sample data were noted in Table X (update) of this DUAR and associated with the data affected in the notes column of the compiled data file by the Project Lead. All field and QC samples were accounted for in the final data compilation. Completeness, correctness, and conformance/compliance of the data set were evaluated against the method, procedural, and contractual requirements. Any deviations to QC collection rates are noted in Tables X(update) and X (update). Data correctness and conformance to the QAPP was verified by examining the specifications for each parameter, reporting format, and data qualification. Analytical methods were reviewed and reporting limits examined for any major discrepancies that were not noted by laboratory qualifiers (ex. elevated reporting limit due to sample dilution). All laboratory deliverables conformed with the contracted data packages or corrections were requested by the Project Lead from ALS Rochester.
+
+## Section 2.3 Data Validation
+
+Suggested wording
+
+Data validation is an analyte- and sample-specific process that extends the evaluation of data beyond method, procedure, or contractual compliance (i.e., data verification) to determine the quality of a specific data set relative to the end use. Data were validated following procedures described in SOP-GEN-#110 Data Validation and Verification and the QAPP. Corrective actions included assigning data qualifiers to samples when DQIs were not met to indicate appropriate data usability. Any additional abnormalities, such as poor analytical performance due to matrix interference, preservation issues, or samples that required re-extraction and reanalysis, were stated in the Case Narrative, and were reflected as data qualifiers or in the “notes” column of the compiled data when applicable.
+
+## Section 2.4. Evaluation of Data Quality Indicators and Objectives for Analytical Data
+
+Suggested wording
+
+Project Data Quality Objectives (DQOs) are from Section A7 of the QAPP referenced on Page 1. Table X(update) and Table x(update) summarize the analytical parameters collected for this project and the QC performance for each parameter against each DQO.
+
+## Summary Statement of DQO QC Exceedances
+
+```{r calib day}
+# library(tidyverse)
+# library(ggpubr)
+# library(rstatix)
+# 
+# calib<-all_df |> 
+#   filter(PROJECT %in% "Calibration Day") |> 
+#   group_by(PARAMETER_NAME,FRACTION,UNIT) |>                   # Group by 'group'
+#   mutate(count_in_group = row_number()) |> # Sequential count within each group
+#   mutate(result = RESULT_VALUE,
+#           n = n()) |> 
+#   select(SITE_CODE,REPLICATE,PARAMETER_NAME,FRACTION,UNIT,
+#          n,result,count_in_group) |> 
+#   distinct()
+# 
+# calib_stats<-calib |> 
+#   dplyr::group_by(PARAMETER_NAME,FRACTION,UNIT) |> 
+#   dplyr::mutate(group = paste(PARAMETER_NAME,FRACTION,UNIT,sep = "_")) |> 
+#   filter(result > 0)
+# 
+# groups <-unique(calib_stats$group)
+# 
+# #ggpubr::ggqqplot(calib_stats, "result", facet.by = "group")
+# 
+# #we're goign to use a repeated measures ANOVA here to do replicate values
+# 
+# calib_short<-calib_stats |> 
+#   filter(n > 1)
+# 
+# bxp <- ggboxplot(calib_short, x = "count_in_group", y = "result", add = "point")
+# bxp
+# 
+# #identify any outliers
+#  calib_outliers<-calib_short |> 
+#    group_by(count_in_group) %>%
+#   identify_outliers(result)
+#  
+#  #normality check
+#  calib_normal<-calib_short |> 
+#    group_by(count_in_group) %>%
+#   shapiro_test(result) #will give an error if the group < 3 
+#  
+#  ggqqplot(calib_short, "result", facet.by = "count_in_group")
+#  
+# 
+# pwc<-wrappedtools::pairwise_t_test(dep_var = calib_short$result, indep_var = calib_short$count_in_group)
+# 
+# #ANOVA
+# res.aov <- anova_test(data = calib_short, dv = result, wid = SITE_CODE, within = count_in_group)
+# get_anova_table(res.aov)
+# 
+# 
+# # pairwise comparisons
+# pwc<-calib_short |> 
+#   group_by(group) |> 
+#   pairwise_t_test(
+#     result ~ count_in_group,
+#     paired = FALSE,
+#     p.adjust.method = "bonferroni"
+#     )
+# 
+# pwc
+# 
+# # Visualization: box plots with p-values
+# pwc <- pwc |> 
+#   add_xy_position(x = groups) #could change to replicate if we have thatz, this is the grouping variable
+# 
+# bxp + 
+#   stat_pvalue_manual(pwc) +
+#   labs(
+#     subtitle = get_test_label(res.aov, detailed = TRUE),
+#     caption = get_pwc_label(pwc)
+#   )
+
+
+```
+
+
+Completeness - this uses the \# of dry sites to evaluate the success of the completeness metric
+
+```{r completeness}
+
+expected_events_by_project<-events |> 
+  mutate(SITE_CODE = sub("_.*", "", EVENT_ID)) |> 
+  mutate(PROJECT = case_when(SITE_CODE %in% prob_sites$SITE_CODE ~ "Stream Probability Sampling 2024-2025",
+                              TRUE ~ PROJECT)) |> 
+  filter(EVENT_DATETIME > "2025-01-01") |>
+   mutate(SITE_CODE = stringr::str_extract(EVENT_ID, "^[^_]+_[^_]+")) |> 
+  mutate() |> 
+    group_by(PROJECT) |> 
+    count(name = "expected_sample_count")
+
+
+expected_events_by_project_prob<-events |> 
+  mutate(SITE_CODE = sub("_.*", "", EVENT_ID)) |> 
+  mutate(PROJECT = case_when(SITE_CODE %in% prob_sites$SITE_CODE ~ "Stream Probability Sampling 2024-2025",
+                              TRUE ~ PROJECT)) |> 
+    mutate(SITE_CODE = stringr::str_extract(EVENT_ID, "^[^_]+_[^_]+")) |> 
+    group_by(PROJECT) |> 
+    count(name = "expected_sample_count")
+
+
+  complete<-raw_chem |> 
+    filter(!PROJECT %in% "Stream Probability Sampling 2024-2025") |> 
+    distinct(EVENT_ID, PROJECT) |> 
+    group_by(PROJECT) |> 
+    count(name = "lab_sample_count") |> 
+    left_join(expected_events_by_project) |> 
+    group_by(PROJECT) |> 
+    mutate(completeness = (lab_sample_count/expected_sample_count)*100)
+
+prob <- raw_chem |> 
+  filter(PROJECT %in% c("Stream Probability Sampling 2024-2025" ))
+
+  complete_prob<-raw_chem |> 
+    filter(PROJECT %in% "Stream Probability Sampling 2024-2025") |> 
+    distinct(EVENT_ID, PROJECT) |> 
+    group_by(PROJECT) |> 
+    count(name = "lab_sample_count") |> 
+    left_join(expected_events_by_project_prob) |> 
+    group_by(PROJECT) |> 
+    mutate(completeness = (lab_sample_count/expected_sample_count)*100)
+
+  complete_all<-rbind(complete_prob,complete)
+  
+  complete_all<-complete_all |> 
+    mutate(expected_sample_count = case_match(
+      PROJECT,
+      "Stream Probability Sampling 2024-2025" ~ 80,
+      "RIBS Routine" ~ 160,
+      .default = expected_sample_count #fixing these to the PLANNED events (since we know these)
+    )) |> 
+    mutate(completeness = (lab_sample_count/expected_sample_count)*100)
+
+# Create a Word-friendly table
+ft <- flextable::flextable(complete_all)
+ft <- flextable::autofit(ft) # Adjust column widths
+ft <- flextable::theme_vanilla(ft) # Clean style
+ft <- flextable::highlight(
+  ft,
+  i = ~ completeness < 80,       # Rows where Score > 90
+  j = "completeness",            # Column to highlight
+  color = "red"             
+)
+
+ft
+
+```
+
+this table summarizes all the flags or DQI's identified in the QAPP
+
+```{r overall_summary, message=FALSE,warning=FALSE}
+
+projects<-unique(raw_chem$PROJECT)
+tables<-list()
+
+for (i in projects){
+
+  df<-raw_chem |> 
+    filter(PROJECT %in% i) |> 
+    filter(SAMPLE_TYPE %in% "chemistry")
+  
+overall_summary<-df |> 
+  filter(!PARAMETER_NAME %in% c("ph of color analysis","ph_for_color_analysis" )) |> 
+  group_by(PARAMETER_NAME,FRACTION) |> 
+  mutate(num = 1,
+         total = sum(num)) |> 
+  ungroup() |> 
+  group_by(PARAMETER_NAME,FRACTION,RESULT_QUALIFIER) |> 
+  reframe(n=n(),
+            total = total) |> 
+  distinct()
+
+overall_summary<-overall_summary |> 
+   select(PARAMETER_NAME, FRACTION,RESULT_QUALIFIER,everything()) |> 
+  tidyr::pivot_wider(names_from = RESULT_QUALIFIER,
+              values_from = n) |> 
+  relocate(total, .after = last_col())
+ 
+print(i)
+# Create a Word-friendly table
+ft <- flextable::flextable(overall_summary)
+ft <- flextable::autofit(ft) # Adjust column widths
+ft <- flextable::theme_vanilla(ft) # Clean style
+
+
+
+ # Store flextable in list with the same name
+  tables[[i]] <- ft
+
+
+}
+
+tables$`Stream Probability Sampling 2024-2025`
+tables$`RIBS Screening - Niagara`
+tables$`RIBS Screening - Ontario`
+tables$`RIBS Screening - Mohawk`
+tables$`RIBS Routine`
+
+
+
+```
+
+# rejected samples - DQI's
+
+this summarizes the rejected values for each project by parameter.
+
+## Percent of total QA sample rates
+
+```{r pct-of-total, message=FALSE,warning=FALSE}
+
+  tables2<-list()
+for (i in projects){
+
+sdg_proj<-raw_chem |> 
+  filter(PROJECT %in% i) |> 
+  filter(SAMPLE_TYPE %in% "chemistry")
+
+sdg_p<-unique(sdg_proj$SAMPLE_DELIVERY_GROUP)
+
+qc_short<-qc |> 
+  filter(SAMPLE_DELIVERY_GROUP %in% sdg_p)
+  
+# total_samples_by_test<-qc_short |> 
+#     filter(!PARAMETER_NAME %in% c("ph of color analysis","ph_for_color_analysis" )) |> 
+#   select(SAMPLE_NAME, PARAMETER_NAME, FRACTION, HOLDING_TIME_QUALIFIER,
+#          MATRIX_SPIKE_QUALIFIER, EQUIPMENT_BLANK_QUALIFIER) |> 
+#   tidyr::pivot_longer(cols = -c(SAMPLE_NAME, PARAMETER_NAME, FRACTION), values_to = "value", names_to = "qc_test") |> 
+#   filter(!is.na(value)) |> 
+#   group_by(PARAMETER_NAME, FRACTION) |> 
+#   tally()
+
+total_samples_by_test<-raw_chem |> 
+  filter(PROJECT %in% i) |> 
+  filter(!PARAMETER_NAME %in% c("ph of color analysis","ph_for_color_analysis" ),
+         SAMPLE_TYPE %in% "chemistry") |>
+  select(PARAMETER_NAME,FRACTION,SITE_CODE) |> 
+  group_by(PARAMETER_NAME,FRACTION) |> 
+  tally()
+  
+##
+qualifier_count<-qc_short |> 
+  select(SAMPLE_NAME, PARAMETER_NAME, FRACTION, HOLDING_TIME_QUALIFIER,
+         MATRIX_SPIKE_QUALIFIER, EQUIPMENT_BLANK_QUALIFIER) |> 
+  tidyr::pivot_longer(cols = -c(SAMPLE_NAME, PARAMETER_NAME, FRACTION), values_to = "value", names_to = "qc_test") |> 
+  filter(!is.na(value)) |> 
+  group_by(PARAMETER_NAME, FRACTION, qc_test, value) |> 
+  count()
+
+qc_table_summary<-qualifier_count |> 
+  rename(count = n) |> 
+ left_join(total_samples_by_test) |> 
+  rename(total_samples = n) |> 
+  filter(value %in% 'reject') |> 
+  mutate(percent = round((count/total_samples)*100))
+
+# Create a Word-friendly table
+ft_rates <- flextable::flextable(qc_table_summary)
+ft_rates <- flextable::highlight(
+  ft_rates,
+  i = ~ value %in% "reject",       # Rows where Score > 90
+  j = "value",          # Column to highlight
+  color = "red"             
+)
+ft_rates <- flextable::autofit(ft_rates) # Adjust column widths
+ft_rates <- flextable::theme_vanilla(ft_rates) # Clean style
+print(i)
+ft <- autofit(ft_rates)
+
+
+ # Store flextable in list with the same name
+  tables2[[i]] <- ft
+
+}
+
+tables2$`Stream Probability Sampling 2024-2025`
+tables2$`RIBS Screening - Niagara`
+tables2$`RIBS Screening - Ontario`
+tables2$`RIBS Screening - Mohawk`
+tables2$`RIBS Routine`
+```
+
+# Results Site specific rejected values
+
+these are all of hte rejected samples including site code - not sure if we want to include these
+
+```{r specific rejected values,results='asis',message=FALSE,warning=FALSE}
+tables3<-list()
+
+for (i in projects){
+  
+raw_chem_short<-raw_chem |> 
+  filter(PROJECT %in% i) |> 
+  filter(SAMPLE_TYPE %in% "chemistry")
+
+raw_filtered_table<-raw_chem_short |>
+  dplyr::filter(RESULT_QUALIFIER %in% c("R")) |>
+  dplyr::select(PROJECT,
+         SITE_CODE,
+         PARAMETER_NAME,FRACTION,
+         UNIT,
+         RESULT_QUALIFIER,RESULT_QUALIFIER_NOTE) |>
+  dplyr::distinct()
+
+# Create a Word-friendly table
+ft3 <- flextable::flextable(raw_filtered_table)
+# Highlight specific cells by condition
+
+ft3 <- flextable::highlight(
+  ft3,
+  i = ~ RESULT_QUALIFIER %in% "R",       # Rows where Score > 90
+  j = "RESULT_QUALIFIER",            # Column to highlight
+  color = "red"             
+)
+
+#had to do this for each one - there is probably a better way to do this
+
+ft3 <- flextable::autofit(ft3) # Adjust column widths
+ft3 <- flextable::theme_vanilla(ft3) # Clean style
+
+ # Store flextable in list with the same name
+  tables3[[i]] <- ft3
+
+
+}
+
+tables3$`Stream Probability Sampling 2024-2025`
+tables3$`RIBS Screening - Niagara`
+tables3$`RIBS Screening - Ontario`
+tables3$`RIBS Screening - Mohawk`
+tables3$`RIBS Routine`
+
+
+```
+
+## Section 2.5 Evaluating Data in Terms of User Needs
+
+Suggested wording
+
+The evaluations described in this DUAR indicate that the data are of sufficient quality to meet the project objectives. The intended use of the data is to establish a baseline to inform NYSDEC Division of Water’s priorities for water quality monitoring through the RIBS monitoring program. Impacts to data quality occurred infrequently and any impacts toward usability were indicated as DOW qualifiers and notes.
+
+# Project Snapshot
+
+```{r chem_snapshot, fig.height=10,fig.width=20,message=FALSE,warning=FALSE}
+# options(scipen = 9999)
+# tables4<-list()
+# 
+# for(i in projects){
+# 
+#   raw_chem_short<-raw_chem |> 
+#     filter(PROJECT %in% i) |> 
+#     filter(SAMPLE_TYPE %in% "chemistry")
+#   
+# plots<-raw_chem_short |> 
+#   filter(!RESULT_QUALIFIER %in% "R") |> 
+#   mutate(full_title = paste(PARAMETER_NAME,UNIT,sep = " ")) |> 
+#   group_by(SITE_CODE, full_title, FRACTION) |> 
+#   reframe(median = median (RESULT_VALUE,na.rm = TRUE),
+#             BASIN = BASIN) |> 
+#   arrange(BASIN) |> 
+#   mutate(SITE_CODE = as.factor(SITE_CODE))
+# 
+# plot_num = length(unique(plots$full_title))/4
+# 
+# plot<-ggplot(plots,aes(x = SITE_CODE, 
+#                          y = median))+
+#   geom_point()+
+#    theme(
+#     axis.text.x = element_blank(),  # Remove text labels
+#     axis.ticks.x = element_blank()  # Remove tick marks
+#   )+
+#   facet_wrap(vars(full_title),scales = "free")
+# 
+# x<-plotly::ggplotly(plot)
+# 
+# # Store flextable in list with the same name
+#   tables4[[i]] <- x
+# 
+# 
+# 
+# }
+# tables4$`Stream Probability Sampling 2024-2025`
+# tables4$`RIBS Screening - Niagara`
+# tables4$`RIBS Screening - Ontario`
+# tables4$`RIBS Screening - Mohawk`
+# tables4$`RIBS Routine`
+
+
+```
